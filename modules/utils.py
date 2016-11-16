@@ -37,3 +37,10 @@ def minibatch_single_image_generator(image_filenames, src_dim, out_dim):
         for image in images_to_serve:
             yield epoch, image
         epoch = epoch + 1
+
+
+def add_noise(image):
+    noise = np.random.normal(0, 10, image.shape[0]*image.shape[1]*image.shape[2])
+    noise_reshaped = np.reshape(noise, image.shape) + image
+    to_return = np.clip(noise_reshaped,0,255)
+    return to_return
