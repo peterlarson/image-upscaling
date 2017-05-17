@@ -76,7 +76,7 @@ class Model:
         return self
 
     def add_residual_block(self, f_in, f_internal, mapsize=3, num_layers=2,\
-                            stddev_factor=1e-3, relu_pre_add = False):
+                            stddev_factor=1e-3, relu_pre_add = True):
         """Adds a residual block as per Arxiv 1512.03385, Figure 3"""
 
         #current = input_tensor
@@ -101,9 +101,19 @@ class Model:
         
         return self
 
+    def dropout(self, probability):
+        self.outputs.append(tf.nn.dropout(self.get_output(), probability))
+
     def upscale(self, size):
         self.outputs.append(tf.image.resize_bilinear(self.get_output(), size))
         return self
+
+
+    def channel_concat(self, to_concat):
+        tensor_1 = self.get_output()
+
+        #TODO: Code written for TF version < 0.11. ON > 0.12, the order of parameters is changed. 
+        self.outputs.append(tf.concat(3, [tensor_1, to_concat]))
 
     def lrelu(self, leak=.2):
         """Adds a leaky ReLU (LReLU) activation function to this model"""
@@ -127,9 +137,142 @@ class Model:
         self.outputs.append(tf.matmul(self.get_output(),w)+b)
         
     def rgb_bound(self):
-        self.outputs.append(tf.minimum(tf.nn.relu(self.get_output()),255))
+        lower = tf.nn.relu(self.get_output())
+        upper = tf.minimum(lower,255)
+        self.outputs.append(upper)
         return self
+
+    def image_patches(self, ksizes, strides, rates, padding = 'VALID'):
+        self.outputs.append(tf.extract_image_patches(self.get_output(), ksizes, strides, rates, padding))
+    
+
+    def tanh_rgb_bound(self):
+        adjusted = tf.nn.tanh(self.get_output())+1
+        scaled = adjusted*255/2
+        self.outputs.append(scaled)
 
     def reshape(self, shape):
         self.outputs.append(tf.reshape(self.get_output(),shape))
         return self
+
+
+
+def discriminator(in_tensor):
+    discriminator = Model("Discriminator", in_tensor)
+    discriminator.full_conv2d(3,64, stride=1)
+    discriminator.lrelu()
+    
+    discriminator.full_conv2d(64,128, stride=2)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    
+    discriminator.full_conv2d(128,128, stride=1)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    
+    discriminator.full_conv2d(128,192, stride=2)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    discriminator.full_conv2d(192,192, stride=1)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    
+    discriminator.full_conv2d(192,256, stride=2)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    discriminator.full_conv2d(256,256, stride=1)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    
+    discriminator.full_conv2d(256,512, stride=2)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    discriminator.full_conv2d(512,512, stride=1)
+    discriminator.batch_norm()
+    discriminator.lrelu()
+    
+    discriminator.full_conv2d(512, 1024, stride=2)
+    
+    discriminator.dense(1024*4,1024*4)
+    discriminator.lrelu()
+    discriminator.dense(1024*4,1)
+    return discriminator
+
+
+def generator(in_tensor):
+    generator = Model("Generator", in_tensor)
+    
+    #todo: add droput? 
+    
+    generator.full_conv2d(3, 64, stride=1) 
+    generator.batch_norm()
+    generator.lrelu()
+    skip_1 = generator.get_output() #64 @ 64
+    
+    generator.full_conv2d(64,128, stride=2) 
+    generator.batch_norm()
+    generator.lrelu()
+    
+    generator.full_conv2d(128,256, stride=1) 
+    generator.batch_norm()
+    generator.lrelu()
+    skip_2 = generator.get_output() # 32 @ 256  
+    
+    generator.full_conv2d(256,512, stride=2) 
+    generator.batch_norm()
+    generator.lrelu()
+    
+    generator.full_conv2d(512,1024, stride=1) 
+    generator.batch_norm()
+    generator.lrelu()
+    skip_3 = generator.get_output() #16 @ 1024
+    
+    generator.full_conv2d(1024,1024, stride=2) # 8x8
+    generator.batch_norm()
+    generator.lrelu()
+    
+    generator.add_residual_block(1024, 1024)
+    generator.add_residual_block(1024, 1024)
+    generator.add_residual_block(1024, 1024)
+    generator.add_residual_block(1024, 1024)
+    
+    generator.upscale([16,16])
+    generator.channel_concat(skip_3)
+    generator.full_conv2d(1024*2,512, stride=1) #16
+    generator.batch_norm()
+    generator.dropout(0.5)
+    generator.lrelu()
+
+    #generator.upscale([32,32])
+    generator.full_conv2d(512,256, stride=1) #16
+    generator.batch_norm()
+    generator.dropout(0.5)
+    generator.lrelu()
+    
+    generator.upscale([32,32])
+    generator.channel_concat(skip_2)
+    generator.full_conv2d(256*2,128, stride=1) 
+    generator.batch_norm()
+    generator.dropout(0.5)
+    generator.lrelu()
+
+    #generator.upscale([128,128])
+    generator.full_conv2d(128,64, stride=1) 
+    generator.batch_norm()
+    generator.dropout(0.5)
+    generator.lrelu()
+
+
+    generator.upscale([64,64])
+    generator.channel_concat(skip_1)
+    generator.full_conv2d(64*2,64, stride=1) 
+    generator.batch_norm()
+    generator.lrelu()
+    
+    generator.add_residual_block(64, 64)
+    generator.add_residual_block(64, 64)
+    generator.full_conv2d(64,3, mapsize = 1)
+    
+    generator.rgb_bound()
+
+    return generator
